@@ -1,5 +1,7 @@
 **/bin/
 **/obj/
+**/obj-standalone/
+**/bin-standalone/
 publish/
 *.apk
 *.zip

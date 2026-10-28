@@ -1,9 +1,8 @@
-using System.Net.Http.Headers;
 using Android.App;
 using Android.Content;
+using Android.Media.Projection;
 using Android.OS;
-using Android.Provider;
-using Android.Views;
+using Android.Text.Method;
 using Android.Widget;
 
 namespace ConsentCapture.Android;
@@ -11,116 +10,153 @@ namespace ConsentCapture.Android;
 [Activity(Label = "Consent Capture", MainLauncher = true, Exported = true)]
 public class MainActivity : Activity
 {
+    private const int CaptureRequest = 2201;
+    private const int NotificationRequest = 2202;
+    private const string PreferencesName = "ConsentCapture";
     private EditText portalUrl = null!;
     private EditText accessToken = null!;
     private CheckBox consent = null!;
-    private Button chooseButton = null!;
-    private Button uploadButton = null!;
-    private TextView selectedLabel = null!;
+    private Button startButton = null!;
+    private Button stopButton = null!;
     private TextView status = null!;
-    private global::Android.Net.Uri? selectedUri;
-    private string selectedMime = "image/jpeg";
-    private string selectedName = "selected-image.jpg";
     private ISharedPreferences preferences = null!;
+    private bool waitingForNotificationPermission;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
-        preferences = GetSharedPreferences("ConsentCapture", FileCreationMode.Private)!;
+        preferences = GetSharedPreferences(PreferencesName, FileCreationMode.Private)!;
         BuildUi();
     }
 
     private void BuildUi()
     {
         var root = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        root.SetPadding(28, 32, 28, 20);
+        root.SetPadding(28, 32, 28, 24);
         root.SetBackgroundColor(global::Android.Graphics.Color.Rgb(245, 248, 252));
-        var scroll = new ScrollView(this); scroll.AddView(root);
-        SetContentView(scroll);
+        var scroll = new ScrollView(this); scroll.AddView(root); SetContentView(scroll);
 
         var title = new TextView(this) { Text = "Consent Capture", TextSize = 24, Typeface = global::Android.Graphics.Typeface.DefaultBold };
-        title.SetTextColor(global::Android.Graphics.Color.Rgb(24, 34, 48)); root.AddView(title);
-        var desc = new TextView(this) { Text = "Choose an image or screenshot using Android's system picker. The app uploads only the image you select after you tap Upload. It does not capture the screen or upload in the background.", TextSize = 15 };
+        root.AddView(title);
+        var desc = new TextView(this)
+        {
+            Text = "When you tap Start and approve Android's screen-sharing prompt, this app uploads a screenshot every 10 seconds. Android shows an ongoing sharing notification with a Stop action. Stop the session at any time from the app or notification.",
+            TextSize = 15
+        };
         desc.SetTextColor(global::Android.Graphics.Color.Rgb(79, 94, 113)); desc.SetPadding(0, 12, 0, 18); root.AddView(desc);
 
-        portalUrl = new EditText(this) { Hint = "Portal URL (https://...)", InputType = global::Android.Text.InputTypes.ClassText | global::Android.Text.InputTypes.TextVariationUri };
+        portalUrl = new EditText(this)
+        {
+            Hint = "Portal URL (https://...)",
+            Text = preferences.GetString("portalUrl", "https://phone-share.onrender.com"),
+            InputType = global::Android.Text.InputTypes.ClassText | global::Android.Text.InputTypes.TextVariationUri
+        };
         portalUrl.SetSingleLine(true);
-        accessToken = new EditText(this) { Hint = "Portal upload token", InputType = global::Android.Text.InputTypes.ClassText | global::Android.Text.InputTypes.TextVariationPassword };
+        accessToken = new EditText(this)
+        {
+            Hint = "Portal upload token",
+            Text = preferences.GetString("accessToken", ""),
+            InputType = global::Android.Text.InputTypes.ClassText | global::Android.Text.InputTypes.TextVariationPassword
+        };
         accessToken.SetSingleLine(true);
+        accessToken.TransformationMethod = PasswordTransformationMethod.Instance;
         root.AddView(portalUrl); root.AddView(accessToken);
 
-        consent = new CheckBox(this) { Text = "I consent to upload images I select to this portal.", TextSize = 14, Checked = preferences.GetBoolean("consent", false) };
+        consent = new CheckBox(this)
+        {
+            Text = "I consent to share this device's screen with the portal during an active session.",
+            TextSize = 14,
+            Checked = preferences.GetBoolean("consent", false)
+        };
         consent.SetPadding(0, 12, 0, 12); root.AddView(consent);
-        chooseButton = new Button(this) { Text = "Choose image or screenshot" }; root.AddView(chooseButton);
-        selectedLabel = new TextView(this) { Text = "No image selected", TextSize = 14 }; selectedLabel.SetPadding(0, 8, 0, 4); root.AddView(selectedLabel);
-        uploadButton = new Button(this) { Text = "Upload selected image", Enabled = false }; root.AddView(uploadButton);
-        status = new TextView(this) { Text = "Consent is stored on this device and can be revoked here.", TextSize = 14 }; status.SetPadding(0, 10, 0, 0); root.AddView(status);
+        startButton = new Button(this) { Text = "Start screen sharing" }; root.AddView(startButton);
+        stopButton = new Button(this) { Text = "Stop screen sharing" }; root.AddView(stopButton);
+        status = new TextView(this) { Text = "Screen capture starts only after you tap Start and approve Android's prompt.", TextSize = 14 };
+        status.SetPadding(0, 12, 0, 0); root.AddView(status);
 
-        consent.CheckedChange += (_, e) => { preferences.Edit()!.PutBoolean("consent", e.IsChecked)!.Apply(); UpdateButtons(); status.Text = e.IsChecked ? "Consent saved on this device." : "Consent revoked."; };
-        chooseButton.Click += (_, _) => OpenPicker();
-        uploadButton.Click += async (_, _) => await UploadAsync();
-        UpdateButtons();
+        consent.CheckedChange += (_, e) =>
+        {
+            preferences.Edit()!.PutBoolean("consent", e.IsChecked)!.Apply();
+            status.Text = e.IsChecked ? "Consent saved on this device. Tap Start to begin a session." : "Consent revoked.";
+        };
+        startButton.Click += (_, _) => BeginStartFlow();
+        stopButton.Click += (_, _) => StopSharing();
+        UpdateButtons(false);
     }
 
-    private void UpdateButtons()
+    private void UpdateButtons(bool sharing)
     {
-        var allowed = consent?.Checked == true;
-        chooseButton.Enabled = allowed;
-        uploadButton.Enabled = allowed && selectedUri is not null;
+        startButton.Enabled = consent?.Checked == true && !sharing;
+        stopButton.Enabled = sharing;
     }
 
-    private void OpenPicker()
+    private void BeginStartFlow()
     {
-        if (!consent.Checked) return;
-        var intent = new Intent(Intent.ActionGetContent);
-        intent.SetType("image/*");
-        intent.AddCategory(Intent.CategoryOpenable);
-        StartActivityForResult(Intent.CreateChooser(intent, "Select an image to upload"), 1201);
+        if (!consent.Checked) { status.Text = "Check the consent box before starting."; return; }
+        var url = portalUrl.Text?.Trim() ?? "";
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || parsed.Scheme != "https")
+        { status.Text = "Enter the portal's HTTPS URL."; return; }
+        var token = accessToken.Text?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(token)) { status.Text = "Enter the portal upload token."; return; }
+        preferences.Edit()!.PutString("portalUrl", url)!.PutString("accessToken", token)!.Apply();
+
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu &&
+            CheckSelfPermission(global::Android.Manifest.Permission.PostNotifications) != global::Android.Content.PM.Permission.Granted)
+        {
+            waitingForNotificationPermission = true;
+            RequestPermissions(new[] { global::Android.Manifest.Permission.PostNotifications }, NotificationRequest);
+            return;
+        }
+        RequestScreenCaptureConsent();
+    }
+
+    public override void OnRequestPermissionsResult(int requestCode, string[] permissions, global::Android.Content.PM.Permission[] grantResults)
+    {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != NotificationRequest || !waitingForNotificationPermission) return;
+        waitingForNotificationPermission = false;
+        if (grantResults.Length > 0 && grantResults[0] == global::Android.Content.PM.Permission.Granted)
+            RequestScreenCaptureConsent();
+        else
+            status.Text = "Allow notifications so Android can show the required active screen-sharing notice.";
+    }
+
+    private void RequestScreenCaptureConsent()
+    {
+        var manager = (MediaProjectionManager?)GetSystemService(MediaProjectionService);
+        if (manager is null) { status.Text = "Android screen capture is unavailable on this device."; return; }
+        status.Text = "Approve Android's screen-sharing prompt to start.";
+        StartActivityForResult(manager.CreateScreenCaptureIntent(), CaptureRequest);
     }
 
     protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
     {
         base.OnActivityResult(requestCode, resultCode, data);
-        if (requestCode != 1201 || resultCode != Result.Ok || data?.Data is null) return;
-        selectedUri = data.Data;
-        selectedMime = ContentResolver?.GetType(selectedUri) ?? "image/jpeg";
-        selectedName = "selected-image" + (selectedMime == "image/png" ? ".png" : ".jpg");
-        selectedLabel.Text = "Selected: " + selectedName;
-        status.Text = "Image selected. Tap Upload to send it.";
-        UpdateButtons();
+        if (requestCode != CaptureRequest) return;
+        if (resultCode != Result.Ok || data is null)
+        {
+            status.Text = "Screen sharing was not started. Android permission is required for each session.";
+            UpdateButtons(false);
+            return;
+        }
+
+        var start = new Intent(this, typeof(ScreenCaptureService));
+        start.SetAction(ScreenCaptureService.ActionStart);
+        start.PutExtra(ScreenCaptureService.ExtraResultCode, (int)resultCode);
+        start.PutExtra(ScreenCaptureService.ExtraProjectionData, data);
+        start.PutExtra(ScreenCaptureService.ExtraPortalUrl, portalUrl.Text?.Trim());
+        start.PutExtra(ScreenCaptureService.ExtraAccessToken, accessToken.Text?.Trim());
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.O) StartForegroundService(start); else StartService(start);
+        status.Text = "Sharing is active. Screenshots upload every 10 seconds. Use Stop to end the session.";
+        UpdateButtons(true);
     }
 
-    private async Task UploadAsync()
+    private void StopSharing()
     {
-        if (!consent.Checked || selectedUri is null) return;
-        global::Android.Net.Uri? parsed;
-        try { parsed = global::Android.Net.Uri.Parse(portalUrl.Text?.Trim()); }
-        catch { parsed = null; }
-        if (parsed?.Scheme != "https" || string.IsNullOrWhiteSpace(parsed.Host))
-        { status.Text = "Enter the portal's HTTPS URL."; return; }
-        var bearer = accessToken.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(bearer)) { status.Text = "Enter the portal upload token."; return; }
-        if (selectedMime is not ("image/jpeg" or "image/png")) { status.Text = "The portal accepts JPEG or PNG. Choose a screenshot or image in one of those formats."; return; }
-        uploadButton.Enabled = false; chooseButton.Enabled = false; status.Text = "Uploading selected image…";
-        try
-        {
-            await using var source = ContentResolver!.OpenInputStream(selectedUri);
-            if (source is null) throw new InvalidOperationException("Android could not open the selected image.");
-            await using var buffer = new MemoryStream(); await source.CopyToAsync(buffer);
-            if (buffer.Length == 0 || buffer.Length > 10 * 1024 * 1024) throw new InvalidOperationException("Choose a nonempty image up to 10 MB.");
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
-            using var form = new MultipartFormDataContent();
-            using var image = new ByteArrayContent(buffer.ToArray());
-            image.Headers.ContentType = MediaTypeHeaderValue.Parse(selectedMime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? selectedMime : "image/jpeg");
-            form.Add(image, "image", selectedName);
-            var endpoint = new System.Uri((parsed!.ToString() ?? string.Empty).TrimEnd('/') + "/api/images");
-            using var response = await client.PostAsync(endpoint, form);
-            var responseContent = response.Content;
-            var errorBody = responseContent is null ? string.Empty : await responseContent.ReadAsStringAsync();
-            status.Text = response.IsSuccessStatusCode ? "Upload complete. Open the portal and load images to view it." : $"Portal returned {(int)response.StatusCode}: {errorBody}";
-        }
-        catch (Exception ex) { status.Text = "Upload failed: " + ex.Message; }
-        finally { UpdateButtons(); }
+        var stop = new Intent(this, typeof(ScreenCaptureService));
+        stop.SetAction(ScreenCaptureService.ActionStop);
+        StartService(stop);
+        status.Text = "Screen sharing stopped.";
+        UpdateButtons(false);
     }
 }

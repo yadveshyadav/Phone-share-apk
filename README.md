@@ -2,7 +2,9 @@
 
 This package contains a visible Windows desktop app and an authenticated ASP.NET Core image portal. The ZIP reference was used for the general .NET agent/backend structure; this implementation does not install a background service, run at startup, hide its window, or capture on a timer.
 
-There is also an Android APK source project. The Android app asks once for app-level consent, then lets the user choose a JPEG or PNG from Android's system picker and upload it with a button. It does not silently capture the display. Android's own screen-capture API requires a fresh system consent prompt for each capture session.
+There is also an Android APK source project. On Android, the user checks the consent box, taps **Start screen sharing**, and approves Android's system screen-sharing prompt. While that session is active, a foreground service captures and uploads one JPEG frame every 10 seconds. Android shows an ongoing notification with a **Stop sharing** action; the user can also stop from the app. Android requires screen-capture approval each time a new session starts, so this is not a permanent one-time permission.
+
+The Android app remembers the HTTPS portal URL and token locally and masks the token in its input field. Images are downscaled to half the device's screen dimensions before upload. The Android app does not start at boot and does not hide itself.
 
 ## Desktop app
 
@@ -32,7 +34,7 @@ Host the portal behind HTTPS on a trusted server, set `PORTAL_UPLOAD_TOKEN` in t
 - `AndroidApp/` — source for the Android client APK.
 - `CaptureApp/` and `Portal/` — source projects.
 
-The portal accepts JPEG or PNG uploads up to 10 MB. The shared token protects image upload, listing, and viewing. HTTPS protects remote traffic in transit; images are stored as files on the portal host, so production deployments should use encrypted storage, backups, access controls, retention rules, and per-user authentication.
+The portal accepts JPEG or PNG uploads up to 10 MB. The shared token protects image upload, listing, and viewing. HTTPS protects remote traffic in transit; images are stored as files on the portal host, so production deployments should use encrypted storage, backups, access controls, retention rules, and per-user authentication. The free Render deployment keeps recent images in memory only and limits storage to 20 images or 48 MB.
 
 ## Current Render setup
 

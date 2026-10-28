@@ -34,8 +34,8 @@ Host the portal behind HTTPS on a trusted server, set `PORTAL_UPLOAD_TOKEN` in t
 
 The portal accepts JPEG or PNG uploads up to 10 MB. The shared token protects image upload, listing, and viewing. HTTPS protects remote traffic in transit; images are stored as files on the portal host, so production deployments should use encrypted storage, backups, access controls, retention rules, and per-user authentication.
 
-## Render deployment
+## Current Render setup
 
-The repository root should contain `render.yaml`, `Portal/`, `CaptureApp/`, and `AndroidApp/`. Push this `ConsentCapture` folder to a GitHub, GitLab, or Bitbucket repository, connect that repository in Render, and create a Blueprint from `render.yaml`. The Blueprint uses a paid web service with a 1 GB persistent disk so uploaded images survive restarts and deploys. Set `PORTAL_UPLOAD_TOKEN` in the Blueprint setup form to a long random value. After deploy, Render gives the portal an HTTPS `onrender.com` URL. Use that URL in either app and enter the same token. Render's persistent disk is single-instance storage; image data is stored at `/var/data/images`.
+The portal gallery is deployed alongside the existing Phone Share app at [phone-share.onrender.com](https://phone-share.onrender.com). The deployed source is in [yadveshyadav/Phone-share-apk](https://github.com/yadveshyadav/Phone-share-apk), and its existing free Render service keeps recent images in memory only. It holds at most 20 images or 48 MB; images may disappear when the free service sleeps, restarts, or redeploys.
 
-Render connection needed: this generated folder has no Git remote yet, so it has not been deployed. The current Render workspace is "My Workspace".
+Use `https://phone-share.onrender.com` as the portal URL in the Android app. The upload token is stored locally in `../PhoneShare-Portal-Access.txt` and configured in the Render service environment. Do not commit or post that token. The separate `render.yaml` in this source repo describes an optional paid standalone portal and is not used by the current deployment.

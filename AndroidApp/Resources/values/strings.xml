@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Consent Capture</string>
+    <string name="app_text">Choose and upload an image with consent.</string>
+</resources>

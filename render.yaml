@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: consent-capture-portal
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./Portal/Dockerfile
+    dockerContext: ./Portal
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: PORTAL_UPLOAD_TOKEN
+        sync: false
+      - key: IMAGE_STORAGE_PATH
+        value: /var/data/images
+    disk:
+      name: portal-images
+      mountPath: /var/data
+      sizeGB: 1

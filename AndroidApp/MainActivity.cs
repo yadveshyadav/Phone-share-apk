@@ -29,6 +29,16 @@ public class MainActivity : Activity
         BuildUi();
     }
 
+    protected override void OnResume()
+    {
+        base.OnResume();
+        if (status is null) return;
+        var active = preferences.GetBoolean("captureActive", false);
+        var savedStatus = preferences.GetString("captureStatus", "");
+        if (!string.IsNullOrWhiteSpace(savedStatus)) status.Text = savedStatus;
+        UpdateButtons(active);
+    }
+
     private void BuildUi()
     {
         var root = new LinearLayout(this) { Orientation = Orientation.Vertical };
@@ -147,8 +157,18 @@ public class MainActivity : Activity
         start.PutExtra(ScreenCaptureService.ExtraPortalUrl, portalUrl.Text?.Trim());
         start.PutExtra(ScreenCaptureService.ExtraAccessToken, accessToken.Text?.Trim());
         if (Build.VERSION.SdkInt >= BuildVersionCodes.O) StartForegroundService(start); else StartService(start);
-        status.Text = "Sharing is active. Screenshots upload every 10 seconds. Use Stop to end the session.";
+        status.Text = "Starting screen sharing…";
         UpdateButtons(true);
+        new Handler(Looper.MainLooper!).PostDelayed(() =>
+        {
+            if (status is null) return;
+            var active = preferences.GetBoolean("captureActive", false);
+            var savedStatus = preferences.GetString("captureStatus", "");
+            status.Text = string.IsNullOrWhiteSpace(savedStatus)
+                ? (active ? "Sharing is active. Screenshots upload every 10 seconds." : "Sharing did not start. Tap Start and approve Android's prompt.")
+                : savedStatus;
+            UpdateButtons(active);
+        }, 2000);
     }
 
     private void StopSharing()
@@ -156,6 +176,7 @@ public class MainActivity : Activity
         var stop = new Intent(this, typeof(ScreenCaptureService));
         stop.SetAction(ScreenCaptureService.ActionStop);
         StartService(stop);
+        preferences.Edit()!.PutBoolean("captureActive", false)!.PutString("captureStatus", "Screen sharing stopped.")!.Apply();
         status.Text = "Screen sharing stopped.";
         UpdateButtons(false);
     }

@@ -21,6 +21,7 @@ public sealed class ScreenCaptureService : Service
     public const string ExtraPortalUrl = "portalUrl";
     public const string ExtraAccessToken = "accessToken";
     private const string ChannelId = "screen_sharing";
+    private const string PreferencesName = "ConsentCapture";
     private const int NotificationId = 3141;
     private readonly object frameLock = new();
     private MediaProjection? projection;
@@ -31,6 +32,7 @@ public sealed class ScreenCaptureService : Service
     private CancellationTokenSource? cancellation;
     private string portalUrl = "";
     private string accessToken = "";
+    private DateTimeOffset lastFrameAttemptAt = DateTimeOffset.MinValue;
     private DateTimeOffset lastFrameTime = DateTimeOffset.MinValue;
 
     public override void OnCreate()
@@ -44,6 +46,7 @@ public sealed class ScreenCaptureService : Service
         if (intent?.Action == ActionStop)
         {
             StopCapture();
+            SetServiceState(false, "Screen sharing stopped.");
             StopSelf();
             return StartCommandResult.NotSticky;
         }
@@ -61,18 +64,19 @@ public sealed class ScreenCaptureService : Service
             : intent.GetParcelableExtra(ExtraProjectionData) as Intent;
         if (resultCode != (int)Result.Ok || projectionData is null || string.IsNullOrWhiteSpace(accessToken))
         {
+            SetServiceState(false, "Screen sharing was not authorized or the portal token is missing.");
             StopSelf();
             return StartCommandResult.NotSticky;
         }
 
-        var notification = BuildNotification("Screen sharing is active. Uploading a frame every 10 seconds.");
-        if (Build.VERSION.SdkInt >= BuildVersionCodes.Q)
-            StartForeground(NotificationId, notification, global::Android.Content.PM.ForegroundService.TypeMediaProjection);
-        else
-            StartForeground(NotificationId, notification);
-
         try
         {
+            var notification = BuildNotification("Starting screen sharing. Uploading a frame every 10 seconds.");
+            if (Build.VERSION.SdkInt >= BuildVersionCodes.Q)
+                StartForeground(NotificationId, notification, global::Android.Content.PM.ForegroundService.TypeMediaProjection);
+            else
+                StartForeground(NotificationId, notification);
+
             var manager = (MediaProjectionManager?)GetSystemService(MediaProjectionService);
             projection = manager?.GetMediaProjection(resultCode, projectionData);
             if (projection is null) throw new InvalidOperationException("Android did not provide a screen capture session.");
@@ -80,9 +84,23 @@ public sealed class ScreenCaptureService : Service
             projection.RegisterCallback(projectionCallback, new Handler(Looper.MainLooper!));
             StartVirtualDisplay();
             cancellation = new CancellationTokenSource();
+            SetServiceState(true, "Sharing is active. Waiting for the first frame.");
+            new Handler(Looper.MainLooper!).PostDelayed(() =>
+            {
+                if (projection is null) return;
+                lock (frameLock)
+                {
+                    if (lastFrameTime != DateTimeOffset.MinValue) return;
+                }
+                var message = "Capture session is active, but Android has not delivered a screen frame yet.";
+                SetServiceState(true, message);
+                UpdateNotification(message);
+            }, 15000);
         }
         catch (Exception ex)
         {
+            global::Android.Util.Log.Error("ConsentCapture", "Screen sharing service failed to start: " + ex);
+            SetServiceState(false, "Could not start screen sharing: " + ex.Message);
             UpdateNotification("Could not start sharing: " + ex.Message);
             StopCapture();
             StopSelf();
@@ -102,7 +120,7 @@ public sealed class ScreenCaptureService : Service
         imageThread = new HandlerThread("ConsentCaptureFrames");
         imageThread.Start();
         var handler = new Handler(imageThread.Looper!);
-        imageReader = ImageReader.NewInstance(width, height, ImageFormatType.FlexRgba8888, 3);
+        imageReader = ImageReader.NewInstance(width, height, (ImageFormatType)(int)Format.Rgba8888, 3);
         imageReader.SetOnImageAvailableListener(new FrameListener(this), handler);
         virtualDisplay = projection!.CreateVirtualDisplay(
             "Consent Capture", width, height, density,
@@ -119,8 +137,8 @@ public sealed class ScreenCaptureService : Service
             var now = DateTimeOffset.UtcNow;
             lock (frameLock)
             {
-                if (now - lastFrameTime < TimeSpan.FromSeconds(10)) return;
-                lastFrameTime = now;
+                if (now - lastFrameAttemptAt < TimeSpan.FromSeconds(10)) return;
+                lastFrameAttemptAt = now;
             }
             var plane = image.GetPlanes()?[0];
             if (plane is null) return;
@@ -128,7 +146,6 @@ public sealed class ScreenCaptureService : Service
             var height = image.Height;
             var pixelStride = plane.PixelStride;
             var rowStride = plane.RowStride;
-            var rowPadding = rowStride - pixelStride * width;
             var source = plane.Buffer;
             var bytes = new byte[source.Remaining()];
             source.Get(bytes);
@@ -150,12 +167,16 @@ public sealed class ScreenCaptureService : Service
             using var output = new MemoryStream();
             if (!bitmap.Compress(Bitmap.CompressFormat.Jpeg!, 78, output)) return;
             var frame = output.ToArray();
+            lock (frameLock) lastFrameTime = now;
             var token = cancellation?.Token ?? CancellationToken.None;
             _ = UploadFrameAsync(frame, token);
         }
         catch (Exception ex)
         {
             global::Android.Util.Log.Warn("ConsentCapture", "Frame conversion failed: " + ex.Message);
+            var message = "Screen capture failed: " + ex.Message;
+            SetServiceState(true, message);
+            UpdateNotification(message);
         }
     }
 
@@ -172,12 +193,20 @@ public sealed class ScreenCaptureService : Service
             form.Add(content, "image", "screen-" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss") + ".jpg");
             var endpoint = new Uri(portalUrl.TrimEnd('/') + "/api/images");
             using var response = await client.PostAsync(endpoint, form, token);
-            UpdateNotification(response.IsSuccessStatusCode
+            var status = response.IsSuccessStatusCode
                 ? "Sharing is active. Last frame uploaded at " + DateTime.Now.ToString("HH:mm:ss") + "."
-                : "Sharing is active. Portal returned HTTP " + (int)response.StatusCode + ".");
+                : "Sharing is active. Portal returned HTTP " + (int)response.StatusCode + ".";
+            SetServiceState(true, status);
+            UpdateNotification(status);
         }
         catch (System.OperationCanceledException) { }
-        catch (Exception ex) { UpdateNotification("Sharing is active. Upload issue: " + ex.Message); }
+        catch (Exception ex)
+        {
+            global::Android.Util.Log.Error("ConsentCapture", "Frame upload failed: " + ex);
+            var status = "Sharing is active. Upload issue: " + ex.Message;
+            SetServiceState(true, status);
+            UpdateNotification(status);
+        }
     }
 
     private Notification BuildNotification(string text)
@@ -217,6 +246,14 @@ public sealed class ScreenCaptureService : Service
         manager?.Notify(NotificationId, BuildNotification(text));
     }
 
+    private void SetServiceState(bool active, string status)
+    {
+        GetSharedPreferences(PreferencesName, FileCreationMode.Private)?.Edit()!
+            .PutBoolean("captureActive", active)!
+            .PutString("captureStatus", status)!
+            .Apply();
+    }
+
     private void StopCapture(bool stopProjection = true)
     {
         cancellation?.Cancel();
@@ -227,7 +264,11 @@ public sealed class ScreenCaptureService : Service
         imageThread?.QuitSafely(); imageThread?.Dispose(); imageThread = null;
         if (stopProjection) projection?.Stop();
         projection?.Dispose(); projection = null; projectionCallback = null;
-        lock (frameLock) lastFrameTime = DateTimeOffset.MinValue;
+        lock (frameLock)
+        {
+            lastFrameAttemptAt = DateTimeOffset.MinValue;
+            lastFrameTime = DateTimeOffset.MinValue;
+        }
         StopForeground(StopForegroundFlags.Remove);
     }
 
@@ -258,6 +299,7 @@ public sealed class ScreenCaptureService : Service
             if (service.TryGetTarget(out var target))
             {
                 target.StopCapture(stopProjection: false);
+                target.SetServiceState(false, "Screen sharing ended by Android.");
                 target.StopSelf();
             }
         }

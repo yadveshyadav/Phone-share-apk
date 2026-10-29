@@ -31,7 +31,7 @@
     <section class="head">
       <div>
         <h1>Consent Capture Portal</h1>
-        <div class="muted">Screenshots captured automatically every 30 seconds, or click "Take Snapshot" anytime.</div>
+        <div class="muted">Live screenshots captured automatically every 30 seconds, or click "Take Snapshot" anytime.</div>
       </div>
       <div class="controls">
         <input id="token" type="password" placeholder="Portal access token" autocomplete="off" value="d542d69273f32f225e4e07bbae6100110a722e26db70e4f1febf8a5188b6d989">
@@ -50,9 +50,9 @@
           loadBtn = document.querySelector('#load');
 
     if (!token.value) token.value = sessionStorage.getItem('portalToken') || 'd542d69273f32f225e4e07bbae6100110a722e26db70e4f1febf8a5188b6d989';
-    let lastIds = '';
+    let lastIds = null;
 
-    async function load() {
+    async function load(force = false) {
       const t = token.value.trim();
       if (!t) { status.textContent = 'Enter the portal token.'; return; }
       sessionStorage.setItem('portalToken', t);
@@ -61,11 +61,11 @@
         if (!r.ok) throw Error(r.status === 401 ? 'Token not accepted.' : 'Portal request failed (' + r.status + ').');
         const list = await r.json();
         const currentIds = list.map(x => x.id).join(',');
-        if (currentIds === lastIds) return;
+        if (!force && currentIds === lastIds) return;
         lastIds = currentIds;
         status.textContent = list.length
           ? `${list.length} recent screenshot${list.length === 1 ? '' : 's'} (auto-refreshing every 5s)`
-          : 'No uploads yet. Start sharing on the device.';
+          : 'No uploads yet. Start sharing to view captures.';
         grid.replaceChildren();
         for (const item of list) {
           const card = document.createElement('article');
@@ -76,7 +76,8 @@
           if (!ir.ok) continue;
           img.src = URL.createObjectURL(await ir.blob());
           const caption = document.createElement('p');
-          caption.textContent = new Date(item.receivedAt + (item.receivedAt.endsWith('Z') ? '' : 'Z')).toLocaleString();
+          const dateStr = item.receivedAt && (item.receivedAt.includes('+') || item.receivedAt.endsWith('Z')) ? item.receivedAt : (item.receivedAt + 'Z');
+          caption.textContent = isNaN(new Date(dateStr).getTime()) ? (item.receivedAt || 'Captured') : new Date(dateStr).toLocaleString();
           card.append(img, caption);
           grid.append(card);
         }
@@ -97,9 +98,9 @@
         });
         if (res.ok) {
           status.textContent = 'Snapshot signal sent to phone! Waiting for upload…';
-          setTimeout(load, 2500);
-          setTimeout(load, 5000);
-          setTimeout(load, 8000);
+          setTimeout(() => load(true), 2500);
+          setTimeout(() => load(true), 5000);
+          setTimeout(() => load(true), 8000);
         } else {
           status.textContent = 'Snapshot request rejected by server (' + res.status + ').';
         }
@@ -114,11 +115,11 @@
     }
 
     snapBtn.addEventListener('click', requestSnapshot);
-    loadBtn.addEventListener('click', load);
-    token.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+    loadBtn.addEventListener('click', () => load(true));
+    token.addEventListener('keydown', e => { if (e.key === 'Enter') load(true); });
 
-    load();
-    setInterval(load, 5000);
+    load(true);
+    setInterval(() => load(false), 5000);
   </script>
 </body>
 </html>

@@ -6,9 +6,9 @@
     <OutputType>Exe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationId>com.simplecalc.tools.app</ApplicationId>
-    <ApplicationVersion>4</ApplicationVersion>
-    <ApplicationDisplayVersion>1.3</ApplicationDisplayVersion>
+    <ApplicationId>com.inf.calculators</ApplicationId>
+    <ApplicationVersion>5</ApplicationVersion>
+    <ApplicationDisplayVersion>1.4</ApplicationDisplayVersion>
     <!-- Ship managed assemblies inside the APK; Fast Deployment APKs crash when installed directly. -->
     <AndroidFastDeployment>false</AndroidFastDeployment>
     <!--

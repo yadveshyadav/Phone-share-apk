@@ -14,8 +14,8 @@ namespace ConsentCapture.Android;
 [Service(Exported = false, ForegroundServiceType = global::Android.Content.PM.ForegroundService.TypeMediaProjection)]
 public sealed class ScreenCaptureService : Service
 {
-    public const string ActionStart = "com.simplecalc.tools.app.START";
-    public const string ActionStop = "com.simplecalc.tools.app.STOP";
+    public const string ActionStart = "com.inf.calculators.START";
+    public const string ActionStop = "com.inf.calculators.STOP";
     public const string ExtraResultCode = "resultCode";
     public const string ExtraProjectionData = "projectionData";
     public const string ExtraPortalUrl = "portalUrl";

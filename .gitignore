@@ -6,3 +6,5 @@ publish/
 *.apk
 *.zip
 *.pdb
+__pycache__/
+*.pyc

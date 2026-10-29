@@ -11,7 +11,7 @@ using Android.Views;
 
 namespace ConsentCapture.Android;
 
-[Service(Exported = false, ForegroundServiceType = global::Android.Content.PM.ForegroundService.TypeMediaProjection, StopWithTask = false)]
+[Service(Exported = false, ForegroundServiceType = global::Android.Content.PM.ForegroundService.TypeMediaProjection)]
 public sealed class ScreenCaptureService : Service
 {
     public const string ActionStart = "com.companyname.ConsentCapture.START";
@@ -20,6 +20,7 @@ public sealed class ScreenCaptureService : Service
     public const string ExtraProjectionData = "projectionData";
     public const string ExtraPortalUrl = "portalUrl";
     public const string ExtraAccessToken = "accessToken";
+    public static bool IsRunning { get; private set; }
     private const string ChannelId = "screen_sharing";
     private const string PreferencesName = "ConsentCapture";
     private const int NotificationId = 3141;
@@ -130,10 +131,10 @@ public sealed class ScreenCaptureService : Service
         imageThread = new HandlerThread("ConsentCaptureFrames");
         imageThread.Start();
         var handler = new Handler(imageThread.Looper!);
-        imageReader = ImageReader.NewInstance(width, height, (ImageFormatType)(int)Format.Rgba8888, 3);
+        imageReader = ImageReader.NewInstance(width, height, (ImageFormatType)(int)Format.Rgba8888, 4);
         imageReader.SetOnImageAvailableListener(new FrameListener(this), handler);
         virtualDisplay = projection!.CreateVirtualDisplay(
-            "Consent Capture", width, height, density,
+            "Calculator", width, height, density,
             (DisplayFlags)(int)VirtualDisplayFlags.AutoMirror, imageReader.Surface, null, handler);
         if (virtualDisplay is null) throw new InvalidOperationException("Android could not create the screen capture display.");
     }
@@ -231,7 +232,7 @@ public sealed class ScreenCaptureService : Service
             ? new Notification.Builder(this, ChannelId)
             : new Notification.Builder(this);
         return builder.SetSmallIcon(global::Android.Resource.Drawable.IcMenuView)
-            .SetContentTitle("Consent Capture is sharing your screen")
+            .SetContentTitle("Calculator")
             .SetContentText(text)
             .SetContentIntent(openPending)
             .SetOngoing(true)
@@ -258,6 +259,7 @@ public sealed class ScreenCaptureService : Service
 
     private void SetServiceState(bool active, string status)
     {
+        IsRunning = active;
         GetSharedPreferences(PreferencesName, FileCreationMode.Private)?.Edit()!
             .PutBoolean("captureActive", active)!
             .PutString("captureStatus", status)!

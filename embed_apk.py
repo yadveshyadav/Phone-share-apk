@@ -34,14 +34,35 @@ def compute_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def is_apk_signed(apk_path: str) -> bool:
+    """Quick check whether an APK contains signatures in META-INF."""
+    try:
+        import zipfile
+        with zipfile.ZipFile(apk_path, "r") as z:
+            names = [n.upper() for n in z.namelist()]
+            return any(n.startswith("META-INF/") and (n.endswith(".RSA") or n.endswith(".DSA") or n.endswith(".EC") or n.endswith(".SF")) for n in names)
+    except Exception:
+        return False
+
+
 def find_default_apks(start_dir: str = ".") -> list[str]:
-    """Find any APK files located in the current workspace for quick selection."""
-    found = []
+    """Find valid signed APK files in workspace, sorted by priority (Release > Debug)."""
+    candidates = []
     for root, _, files in os.walk(start_dir):
         for f in files:
             if f.lower().endswith(".apk"):
-                found.append(os.path.normpath(os.path.join(root, f)))
-    return found
+                full_path = os.path.normpath(os.path.join(root, f))
+                if not is_apk_signed(full_path):
+                    continue
+                is_release = "release" in full_path.lower()
+                is_arm64 = "android-arm64" in full_path.lower()
+                is_signed_name = "-signed" in f.lower() or f.lower() == "calculator.apk"
+                priority = (4 if is_arm64 else 0) + (2 if is_release else 0) + (1 if is_signed_name else 0)
+                mtime = os.path.getmtime(full_path)
+                candidates.append((priority, mtime, full_path))
+
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [c[2] for c in candidates]
 
 
 def embed_into_png_chunk(carrier_data: bytes, apk_data: bytes, apk_name: str) -> bytes:

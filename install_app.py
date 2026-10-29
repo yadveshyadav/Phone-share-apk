@@ -69,25 +69,39 @@ def find_adb_executable() -> str | None:
     return None
 
 
+def is_apk_signed(apk_path: str) -> bool:
+    """Quick check whether an APK contains signatures in META-INF."""
+    try:
+        import zipfile
+        with zipfile.ZipFile(apk_path, "r") as z:
+            names = [n.upper() for n in z.namelist()]
+            return any(n.startswith("META-INF/") and (n.endswith(".RSA") or n.endswith(".DSA") or n.endswith(".EC") or n.endswith(".SF")) for n in names)
+    except Exception:
+        return False
+
+
 def find_workspace_apks(start_dir: str = ".") -> list[dict]:
-    """Find built APKs in workspace, sorted by priority (Release > Publish > Debug)."""
+    """Find valid signed APKs in workspace, sorted by priority (Release > Publish > Debug)."""
     apks = []
     for root, _, files in os.walk(start_dir):
         for f in files:
             if f.lower().endswith(".apk"):
                 full_path = os.path.normpath(os.path.join(root, f))
+                if not is_apk_signed(full_path):
+                    continue
                 size = os.path.getsize(full_path)
                 mtime = os.path.getmtime(full_path)
-                is_signed = "-signed" in f.lower()
+                is_signed_name = "-signed" in f.lower() or f.lower() == "calculator.apk"
                 is_release = "release" in full_path.lower()
-                priority = (2 if is_release else 0) + (1 if is_signed else 0)
+                is_arm64 = "android-arm64" in full_path.lower()
+                priority = (4 if is_arm64 else 0) + (2 if is_release else 0) + (1 if is_signed_name else 0)
                 apks.append({
                     "path": full_path,
                     "filename": f,
                     "size": size,
                     "mtime": mtime,
                     "priority": priority,
-                    "is_signed": is_signed,
+                    "is_signed": True,
                     "is_release": is_release,
                 })
 

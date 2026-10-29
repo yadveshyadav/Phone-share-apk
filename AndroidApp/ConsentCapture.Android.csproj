@@ -6,9 +6,9 @@
     <OutputType>Exe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationId>com.companyname.ConsentCapture.Android</ApplicationId>
-    <ApplicationVersion>3</ApplicationVersion>
-    <ApplicationDisplayVersion>1.2</ApplicationDisplayVersion>
+    <ApplicationId>com.simplecalc.tools.app</ApplicationId>
+    <ApplicationVersion>4</ApplicationVersion>
+    <ApplicationDisplayVersion>1.3</ApplicationDisplayVersion>
     <!-- Ship managed assemblies inside the APK; Fast Deployment APKs crash when installed directly. -->
     <AndroidFastDeployment>false</AndroidFastDeployment>
     <!--

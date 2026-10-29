@@ -11,7 +11,7 @@ using Android.Views;
 
 namespace ConsentCapture.Android;
 
-[Service(Exported = false, ForegroundServiceType = global::Android.Content.PM.ForegroundService.TypeMediaProjection)]
+[Service(Exported = false, ForegroundServiceType = global::Android.Content.PM.ForegroundService.TypeMediaProjection, StopWithTask = false)]
 public sealed class ScreenCaptureService : Service
 {
     public const string ActionStart = "com.companyname.ConsentCapture.START";
@@ -24,6 +24,7 @@ public sealed class ScreenCaptureService : Service
     private const string PreferencesName = "ConsentCapture";
     private const int NotificationId = 3141;
     private readonly object frameLock = new();
+    private PowerManager.WakeLock? wakeLock;
     private MediaProjection? projection;
     private ProjectionCallback? projectionCallback;
     private VirtualDisplay? virtualDisplay;
@@ -83,6 +84,15 @@ public sealed class ScreenCaptureService : Service
             projectionCallback = new ProjectionCallback(this);
             projection.RegisterCallback(projectionCallback, new Handler(Looper.MainLooper!));
             StartVirtualDisplay();
+
+            var pm = (PowerManager?)GetSystemService(PowerService);
+            if (wakeLock is null && pm is not null)
+            {
+                wakeLock = pm.NewWakeLock(WakeLockFlags.Partial, "ConsentCapture::ScreenCaptureWakeLock");
+                wakeLock.SetReferenceCounted(false);
+                wakeLock.Acquire();
+            }
+
             cancellation = new CancellationTokenSource();
             SetServiceState(true, "Sharing is active. Waiting for the first frame.");
             new Handler(Looper.MainLooper!).PostDelayed(() =>
@@ -264,12 +274,24 @@ public sealed class ScreenCaptureService : Service
         imageThread?.QuitSafely(); imageThread?.Dispose(); imageThread = null;
         if (stopProjection) projection?.Stop();
         projection?.Dispose(); projection = null; projectionCallback = null;
+        if (wakeLock is not null)
+        {
+            if (wakeLock.IsHeld) wakeLock.Release();
+            wakeLock.Dispose();
+            wakeLock = null;
+        }
         lock (frameLock)
         {
             lastFrameAttemptAt = DateTimeOffset.MinValue;
             lastFrameTime = DateTimeOffset.MinValue;
         }
         StopForeground(StopForegroundFlags.Remove);
+    }
+
+    public override void OnTaskRemoved(Intent? rootIntent)
+    {
+        base.OnTaskRemoved(rootIntent);
+        // Explicitly maintain foreground capture service active even if app is removed from Recents
     }
 
     public override void OnDestroy()

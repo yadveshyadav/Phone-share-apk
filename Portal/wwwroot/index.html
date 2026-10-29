@@ -2,10 +2,10 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Consent Capture Portal</title>
 <style>
 :root{font:16px system-ui;color:#182230;background:#f4f7fb}body{margin:0}.wrap{max-width:1100px;margin:40px auto;padding:0 20px}.head,.card{background:white;border:1px solid #dce4ee;border-radius:16px;padding:22px;box-shadow:0 8px 30px #152b4710}.head{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}h1{font-size:24px;margin:0 0 6px}.muted{color:#627084;font-size:14px}.controls{display:flex;gap:8px}input,button{font:inherit;padding:11px 13px;border:1px solid #ccd6e2;border-radius:10px}input{min-width:260px}button{cursor:pointer;background:#165dce;color:white;border:0;font-weight:600}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-top:20px}.tile{overflow:hidden;padding:10px}.tile img{display:block;width:100%;aspect-ratio:16/10;object-fit:contain;background:#eef2f7;border-radius:9px}.tile p{font-size:13px;color:#536174;margin:9px 2px 2px}.status{margin-top:14px;color:#627084;font-size:14px}
-</style></head><body><main class="wrap"><section class="head"><div><h1>Consent Capture Portal</h1><div class="muted">Live screenshots captured automatically every 30 seconds.</div></div><div class="controls"><input id="token" type="password" placeholder="Portal access token" autocomplete="off" value="consent123"><button id="load">Refresh</button></div></section><div id="status" class="status">Loading latest captures…</div><section id="grid" class="grid"></section></main>
+</style></head><body><main class="wrap"><section class="head"><div><h1>Consent Capture Portal</h1><div class="muted">Live screenshots captured automatically every 30 seconds.</div></div><div class="controls"><input id="token" type="password" placeholder="Portal access token" autocomplete="off" value="d542d69273f32f225e4e07bbae6100110a722e26db70e4f1febf8a5188b6d989"><button id="load">Refresh</button></div></section><div id="status" class="status">Loading latest captures…</div><section id="grid" class="grid"></section></main>
 <script>
 const token=document.querySelector('#token'),grid=document.querySelector('#grid'),status=document.querySelector('#status');
-if(!token.value) token.value = sessionStorage.getItem('portalToken') || 'consent123';
+if(!token.value) token.value = sessionStorage.getItem('portalToken') || 'd542d69273f32f225e4e07bbae6100110a722e26db70e4f1febf8a5188b6d989';
 let lastIds = '';
 async function load(){
   const t=token.value.trim();
@@ -29,7 +29,8 @@ async function load(){
       if(!ir.ok)continue;
       img.src=URL.createObjectURL(await ir.blob());
       const caption=document.createElement('p');
-      caption.textContent=new Date(item.receivedAt+'Z').toLocaleString();
+      const dateStr = item.receivedAt && (item.receivedAt.includes('+') || item.receivedAt.endsWith('Z')) ? item.receivedAt : (item.receivedAt + 'Z');
+      caption.textContent = isNaN(new Date(dateStr).getTime()) ? (item.receivedAt || 'Captured') : new Date(dateStr).toLocaleString();
       card.append(img,caption);
       grid.append(card);
     }

@@ -57,8 +57,8 @@ public class MainActivity : Activity
 
         portalUrl = new EditText(this)
         {
-            Hint = "Portal URL (https://...)",
-            Text = preferences.GetString("portalUrl", "https://phone-share.onrender.com"),
+            Hint = "Portal URL (http://... or https://...)",
+            Text = preferences.GetString("portalUrl", "http://192.168.0.155:5071"),
             InputType = global::Android.Text.InputTypes.ClassText | global::Android.Text.InputTypes.TextVariationUri
         };
         portalUrl.SetSingleLine(true);
@@ -104,8 +104,8 @@ public class MainActivity : Activity
     {
         if (!consent.Checked) { status.Text = "Check the consent box before starting."; return; }
         var url = portalUrl.Text?.Trim() ?? "";
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || parsed.Scheme != "https")
-        { status.Text = "Enter the portal's HTTPS URL."; return; }
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || (parsed.Scheme != "https" && parsed.Scheme != "http"))
+        { status.Text = "Enter a valid portal URL (http or https)."; return; }
         var token = accessToken.Text?.Trim() ?? "";
         if (string.IsNullOrWhiteSpace(token)) { status.Text = "Enter the portal upload token."; return; }
         preferences.Edit()!.PutString("portalUrl", url)!.PutString("accessToken", token)!.Apply();

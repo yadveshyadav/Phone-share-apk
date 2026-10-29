@@ -6,8 +6,8 @@
 <script>
 const token=document.querySelector('#token'),grid=document.querySelector('#grid'),status=document.querySelector('#status');
 if(!token.value) token.value = sessionStorage.getItem('portalToken') || 'd542d69273f32f225e4e07bbae6100110a722e26db70e4f1febf8a5188b6d989';
-let lastIds = '';
-async function load(){
+let lastIds = null;
+async function load(force = false){
   const t=token.value.trim();
   if(!t){status.textContent='Enter the portal token.';return}
   sessionStorage.setItem('portalToken',t);
@@ -16,9 +16,9 @@ async function load(){
     if(!r.ok)throw Error(r.status===401?'Token not accepted.':'Portal request failed ('+r.status+').');
     const list=await r.json();
     const currentIds = list.map(x=>x.id).join(',');
-    if(currentIds === lastIds) return;
+    if(!force && currentIds === lastIds) return;
     lastIds = currentIds;
-    status.textContent=list.length?`${list.length} recent screenshot${list.length===1?'':'s'} (auto-refreshing every 5s)`:'No uploads yet.';
+    status.textContent=list.length?`${list.length} recent screenshot${list.length===1?'':'s'} (auto-refreshing every 5s)`:'No uploads yet. Start sharing to view captures.';
     grid.replaceChildren();
     for(const item of list){
       const card=document.createElement('article');
@@ -36,8 +36,8 @@ async function load(){
     }
   }catch(e){status.textContent=e.message}
 }
-document.querySelector('#load').addEventListener('click',load);
-token.addEventListener('keydown',e=>{if(e.key==='Enter')load()});
+document.querySelector('#load').addEventListener('click',()=>load(true));
+token.addEventListener('keydown',e=>{if(e.key==='Enter')load(true)});
 load();
 setInterval(load, 5000);
 </script></body></html>

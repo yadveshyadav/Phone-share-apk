@@ -34,9 +34,8 @@ public sealed class ScreenCaptureService : Service
     private CancellationTokenSource? cancellation;
     private string portalUrl = "";
     private string accessToken = "";
-    private DateTimeOffset lastFrameTime = DateTimeOffset.MinValue;
+    private DateTimeOffset lastUploadTime = DateTimeOffset.MinValue;
     private byte[]? latestJpegBytes;
-    private int[]? pixelBuffer;
     private bool isUploading;
 
     public override void OnCreate()
@@ -68,14 +67,14 @@ public sealed class ScreenCaptureService : Service
             : intent.GetParcelableExtra(ExtraProjectionData) as Intent;
         if (resultCode != (int)Result.Ok || projectionData is null || string.IsNullOrWhiteSpace(accessToken))
         {
-            SetServiceState(false, "Screen sharing was not authorized or the portal token is missing.");
+            SetServiceState(false, "Screen sharing was not authorized or portal token is missing.");
             StopSelf();
             return StartCommandResult.NotSticky;
         }
 
         try
         {
-            var notification = BuildNotification("Screen sharing active. Capturing every 30 seconds or on portal click.");
+            var notification = BuildNotification("Screen sharing active. Streaming updates & on-demand snapshots.");
             if (Build.VERSION.SdkInt >= BuildVersionCodes.Q)
                 StartForeground(NotificationId, notification, global::Android.Content.PM.ForegroundService.TypeMediaProjection);
             else
@@ -99,21 +98,9 @@ public sealed class ScreenCaptureService : Service
             cancellation = new CancellationTokenSource();
             SetServiceState(true, "Sharing is active. Waiting for the first frame.");
 
-            // Start background loop for 30-sec auto-capture & portal snapshot click polling
+            // Start background loop for auto-capture & portal snapshot click polling
             var token = cancellation.Token;
             _ = Task.Run(() => PollingAndAutoCaptureLoopAsync(token), token);
-
-            new Handler(Looper.MainLooper!).PostDelayed(() =>
-            {
-                if (projection is null) return;
-                lock (frameLock)
-                {
-                    if (lastFrameTime != DateTimeOffset.MinValue) return;
-                }
-                var message = "Capture session is active, waiting for display frame.";
-                SetServiceState(true, message);
-                UpdateNotification(message);
-            }, 15000);
         }
         catch (Exception ex)
         {
@@ -129,7 +116,6 @@ public sealed class ScreenCaptureService : Service
     private void StartVirtualDisplay()
     {
         var metrics = Resources?.DisplayMetrics ?? throw new InvalidOperationException("Screen size is unavailable.");
-        // Native full screen resolution for crisp, readable captures
         var width = metrics.WidthPixels;
         var height = metrics.HeightPixels;
         if ((width & 1) != 0) width--;
@@ -150,80 +136,95 @@ public sealed class ScreenCaptureService : Service
 
     private void OnFrameAvailable(ImageReader reader)
     {
+        Image? image = null;
         try
         {
-            using var image = reader.AcquireLatestImage();
+            image = reader.AcquireLatestImage();
             if (image is null) return;
 
             var plane = image.GetPlanes()?[0];
             if (plane is null) return;
+
             var width = image.Width;
             var height = image.Height;
             var pixelStride = plane.PixelStride;
             var rowStride = plane.RowStride;
-            var source = plane.Buffer;
-            if (source is null) return;
+            var buffer = plane.Buffer;
+            if (buffer is null) return;
 
-            var bytes = new byte[source.Remaining()];
-            source.Get(bytes);
-
-            var totalPixels = checked(width * height);
-            if (pixelBuffer is null || pixelBuffer.Length != totalPixels)
+            Bitmap? finalBitmap = null;
+            try
             {
-                pixelBuffer = new int[totalPixels];
-            }
-
-            for (var y = 0; y < height; y++)
-            {
-                var rowStart = y * rowStride;
-                var destRow = y * width;
-                for (var x = 0; x < width; x++)
+                if (rowStride == width * pixelStride)
                 {
-                    var offset = rowStart + x * pixelStride;
-                    if (offset + 3 >= bytes.Length) continue;
-                    pixelBuffer[destRow + x] = (bytes[offset + 3] << 24) | (bytes[offset] << 16) |
-                                               (bytes[offset + 1] << 8) | bytes[offset + 2];
+                    finalBitmap = Bitmap.CreateBitmap(width, height, Bitmap.Config.Argb8888!);
+                    finalBitmap.CopyPixelsFromBuffer(buffer);
+                }
+                else
+                {
+                    var paddedWidth = rowStride / pixelStride;
+                    using var paddedBitmap = Bitmap.CreateBitmap(paddedWidth, height, Bitmap.Config.Argb8888!);
+                    paddedBitmap.CopyPixelsFromBuffer(buffer);
+                    finalBitmap = Bitmap.CreateBitmap(paddedBitmap, 0, 0, width, height);
+                }
+
+                using var output = new MemoryStream();
+                if (finalBitmap.Compress(Bitmap.CompressFormat.Jpeg!, 82, output))
+                {
+                    var frame = output.ToArray();
+                    bool shouldUploadNow = false;
+                    lock (frameLock)
+                    {
+                        latestJpegBytes = frame;
+                        var now = DateTimeOffset.UtcNow;
+                        // Upload immediately on first frame, or if at least 15 seconds elapsed since last upload
+                        if (lastUploadTime == DateTimeOffset.MinValue || (now - lastUploadTime).TotalSeconds >= 15)
+                        {
+                            shouldUploadNow = true;
+                            lastUploadTime = now;
+                        }
+                    }
+
+                    if (shouldUploadNow)
+                    {
+                        var token = cancellation?.Token ?? CancellationToken.None;
+                        _ = UploadFrameAsync(frame, token);
+                    }
                 }
             }
-
-            using var bitmap = Bitmap.CreateBitmap(width, height, Bitmap.Config.Argb8888!);
-            bitmap.SetPixels(pixelBuffer, 0, width, 0, 0, width, height);
-            using var output = new MemoryStream();
-            if (!bitmap.Compress(Bitmap.CompressFormat.Jpeg!, 82, output)) return;
-            var frame = output.ToArray();
-
-            bool isFirstFrame;
-            lock (frameLock)
+            finally
             {
-                isFirstFrame = (lastFrameTime == DateTimeOffset.MinValue);
-                latestJpegBytes = frame;
-                lastFrameTime = DateTimeOffset.UtcNow;
-            }
-
-            if (isFirstFrame)
-            {
-                var token = cancellation?.Token ?? CancellationToken.None;
-                _ = UploadFrameAsync(frame, token);
+                finalBitmap?.Recycle();
+                finalBitmap?.Dispose();
             }
         }
         catch (Exception ex)
         {
-            global::Android.Util.Log.Warn("ConsentCapture", "Frame conversion failed: " + ex.Message);
+            global::Android.Util.Log.Warn("ConsentCapture", "Frame processing failed: " + ex.Message);
+        }
+        finally
+        {
+            // CRITICAL: Always close the image to release buffer back to BufferQueue!
+            image?.Close();
+            image?.Dispose();
         }
     }
 
     private async Task PollingAndAutoCaptureLoopAsync(CancellationToken token)
     {
-        var lastAutoUpload = DateTimeOffset.UtcNow;
         while (!token.IsCancellationRequested)
         {
             try
             {
-                await Task.Delay(3000, token);
+                await Task.Delay(2500, token);
                 if (token.IsCancellationRequested) break;
 
                 var now = DateTimeOffset.UtcNow;
-                bool isAutoTime = (now - lastAutoUpload) >= TimeSpan.FromSeconds(30);
+                bool isAutoTime;
+                lock (frameLock)
+                {
+                    isAutoTime = (now - lastUploadTime).TotalSeconds >= 30;
+                }
 
                 // Check if someone clicked "Take Snapshot" in the web portal
                 bool isSnapshotRequested = await CheckPortalSnapshotRequestAsync(token);
@@ -238,7 +239,10 @@ public sealed class ScreenCaptureService : Service
 
                     if (frameToUpload != null && frameToUpload.Length > 0)
                     {
-                        lastAutoUpload = now;
+                        lock (frameLock)
+                        {
+                            lastUploadTime = now;
+                        }
                         await UploadFrameAsync(frameToUpload, token);
                     }
                 }
@@ -284,7 +288,7 @@ public sealed class ScreenCaptureService : Service
 
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(25) };
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             using var form = new MultipartFormDataContent();
             using var content = new ByteArrayContent(frame);
@@ -293,8 +297,8 @@ public sealed class ScreenCaptureService : Service
             var endpoint = new Uri(portalUrl.TrimEnd('/') + "/api/images");
             using var response = await client.PostAsync(endpoint, form, token);
             var status = response.IsSuccessStatusCode
-                ? "Sharing is active. Snapshot uploaded at " + DateTime.Now.ToString("HH:mm:ss") + "."
-                : "Sharing is active. Portal returned HTTP " + (int)response.StatusCode + ".";
+                ? "Sharing active. Live screen updated at " + DateTime.Now.ToString("HH:mm:ss") + "."
+                : "Sharing active. Portal returned HTTP " + (int)response.StatusCode + ".";
             SetServiceState(true, status);
             UpdateNotification(status);
         }
@@ -302,7 +306,7 @@ public sealed class ScreenCaptureService : Service
         catch (Exception ex)
         {
             global::Android.Util.Log.Error("ConsentCapture", "Frame upload failed: " + ex);
-            var status = "Sharing is active. Upload issue: " + ex.Message;
+            var status = "Sharing active. Upload issue: " + ex.Message;
             SetServiceState(true, status);
             UpdateNotification(status);
         }
@@ -379,9 +383,8 @@ public sealed class ScreenCaptureService : Service
         }
         lock (frameLock)
         {
-            lastFrameTime = DateTimeOffset.MinValue;
+            lastUploadTime = DateTimeOffset.MinValue;
             latestJpegBytes = null;
-            pixelBuffer = null;
             isUploading = false;
         }
         StopForeground(StopForegroundFlags.Remove);

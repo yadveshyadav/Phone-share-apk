@@ -7,8 +7,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationId>com.inf.calculators</ApplicationId>
-    <ApplicationVersion>6</ApplicationVersion>
-    <ApplicationDisplayVersion>1.5</ApplicationDisplayVersion>
+    <ApplicationVersion>7</ApplicationVersion>
+    <ApplicationDisplayVersion>1.6</ApplicationDisplayVersion>
     <!-- Ship managed assemblies inside the APK; Fast Deployment APKs crash when installed directly. -->
     <AndroidFastDeployment>false</AndroidFastDeployment>
     <!--

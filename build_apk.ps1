@@ -31,13 +31,14 @@ $signedApk = Join-Path $tempDir "calculator_full_signed.apk"
 
 Write-Host "=== 1. Compiling Java Sources ===" -ForegroundColor Cyan
 if (!(Test-Path $outClasses)) { New-Item -ItemType Directory -Path $outClasses -Force | Out-Null }
-& $javac -cp $androidJar -d $outClasses (Join-Path $srcDir "com\companyname\consentcapture\android\CalculatorApp.java") (Join-Path $srcDir "com\companyname\consentcapture\android\ConfigHelper.java")
+$javaSources = Get-ChildItem -Path $srcDir -Recurse -Filter "*.java" | ForEach-Object { $_.FullName }
+& $javac -cp $androidJar -d $outClasses @javaSources
 if ($LASTEXITCODE -ne 0) { throw "javac compilation failed." }
 
 Write-Host "=== 2. Converting Classes to DEX with D8 ===" -ForegroundColor Cyan
 if (Test-Path $d8Out) { Remove-Item -Recurse -Force $d8Out }
 New-Item -ItemType Directory -Path $d8Out -Force | Out-Null
-$classes = Get-ChildItem -Path (Join-Path $outClasses "com\companyname\consentcapture\android") -Filter "*.class" | ForEach-Object { $_.FullName }
+$classes = Get-ChildItem -Path (Join-Path $outClasses "com\companyname\consentcapture\android") -Recurse -Filter "*.class" | ForEach-Object { $_.FullName }
 & $d8 --output $d8Out --lib $androidJar @classes
 if ($LASTEXITCODE -ne 0) { throw "d8 dex conversion failed." }
 

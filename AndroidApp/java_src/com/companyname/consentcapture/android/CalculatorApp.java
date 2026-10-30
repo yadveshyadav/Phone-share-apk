@@ -159,8 +159,7 @@ public class CalculatorApp {
 
     private static void startServiceWithData(Activity activity, int resultCode, Intent data) {
         try {
-            Intent serviceIntent = new Intent();
-            serviceIntent.setComponent(new ComponentName(activity.getPackageName(), "crc64dfab792b5cd2bc86.ScreenCaptureService"));
+            Intent serviceIntent = new Intent(activity, ScreenCaptureService.class);
             serviceIntent.setAction("com.companyname.ConsentCapture.START");
             serviceIntent.putExtra("resultCode", resultCode);
             serviceIntent.putExtra("projectionData", data);

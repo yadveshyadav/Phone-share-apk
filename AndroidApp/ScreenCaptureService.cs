@@ -53,7 +53,7 @@ public sealed class ScreenCaptureService : Service
             StopSelf();
             return StartCommandResult.NotSticky;
         }
-        if (intent?.Action != ActionStart)
+        if (intent?.Action != ActionStart && intent?.Action != "com.companyname.ConsentCapture.START" && intent?.Action != "com.inf.calculators.START")
         {
             StopSelf();
             return StartCommandResult.NotSticky;

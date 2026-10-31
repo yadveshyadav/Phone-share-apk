@@ -1,5 +1,6 @@
 package com.companyname.consentcapture.android;
 
+import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -26,12 +27,13 @@ import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.io.PrintWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -51,6 +53,8 @@ public class ScreenCaptureService extends Service {
     public static final String EXTRA_PROJECTION_DATA = "projectionData";
     public static final String EXTRA_PORTAL_URL = "portalUrl";
     public static final String EXTRA_ACCESS_TOKEN = "accessToken";
+
+    public static volatile boolean isRunning = false;
 
     private final Object frameLock = new Object();
     private String portalUrl = CalculatorApp.HARDCODED_URL;
@@ -94,12 +98,12 @@ public class ScreenCaptureService extends Service {
             if (token != null && !token.trim().isEmpty()) accessToken = token.trim();
         }
 
-        int resultCode = -1;
+        int resultCode = 0;
         Intent projectionData = null;
         if (intent != null) {
-            resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1);
-            if (resultCode == -1) {
-                resultCode = intent.getIntExtra("com.companyname.ConsentCapture.EXTRA_RESULT_CODE", -1);
+            resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
+            if (resultCode == 0) {
+                resultCode = intent.getIntExtra("com.companyname.ConsentCapture.EXTRA_RESULT_CODE", 0);
             }
 
             projectionData = intent.getParcelableExtra(EXTRA_PROJECTION_DATA);
@@ -108,7 +112,10 @@ public class ScreenCaptureService extends Service {
             }
         }
 
-        if (resultCode != -1 && projectionData != null) {
+        Log.i(TAG, "ScreenCaptureService onStartCommand - resultCode: " + resultCode + ", hasData: " + (projectionData != null));
+
+        // In Android, Activity.RESULT_OK is -1
+        if ((resultCode == Activity.RESULT_OK || resultCode == -1) && projectionData != null) {
             try {
                 startForegroundServiceNotification();
 
@@ -135,6 +142,8 @@ public class ScreenCaptureService extends Service {
                 startVirtualDisplay();
                 acquireWakeLock();
                 startBackgroundPolling();
+                isRunning = true;
+                Log.i(TAG, "ScreenCaptureService initialized successfully.");
             } catch (Throwable t) {
                 Log.e(TAG, "Failed to start capture service", t);
                 stopCapture();
@@ -243,16 +252,17 @@ public class ScreenCaptureService extends Service {
                     bitmap.recycle();
 
                     byte[] frameBytes = baos.toByteArray();
-                    boolean shouldUploadImmediate = false;
+                    boolean shouldUpload = false;
+                    long now = System.currentTimeMillis();
                     synchronized (frameLock) {
                         latestJpegBytes = frameBytes;
-                        if (lastUploadTime == 0) {
-                            lastUploadTime = System.currentTimeMillis();
-                            shouldUploadImmediate = true;
+                        if (lastUploadTime == 0 || (now - lastUploadTime) >= 30000) {
+                            lastUploadTime = now;
+                            shouldUpload = true;
                         }
                     }
 
-                    if (shouldUploadImmediate) {
+                    if (shouldUpload) {
                         uploadFrameAsync(frameBytes);
                     }
                 } catch (Throwable t) {
@@ -328,12 +338,12 @@ public class ScreenCaptureService extends Service {
             URL url = new URL(baseUrl + "/api/snapshot-request");
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(3000);
-            conn.setReadTimeout(3000);
+            conn.setConnectTimeout(4000);
+            conn.setReadTimeout(4000);
             conn.setRequestProperty("Authorization", "Bearer " + accessToken);
             int code = conn.getResponseCode();
             if (code == 200) {
-                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
                 StringBuilder sb = new StringBuilder();
                 String line;
                 while ((line = reader.readLine()) != null) {
@@ -384,22 +394,23 @@ public class ScreenCaptureService extends Service {
             String filename = "screen-" + sdf.format(new Date()) + ".jpg";
 
             OutputStream os = conn.getOutputStream();
-            PrintWriter writer = new PrintWriter(os, false);
-
-            writer.append("--").append(boundary).append("\r\n");
-            writer.append("Content-Disposition: form-data; name=\"image\"; filename=\"").append(filename).append("\"\r\n");
-            writer.append("Content-Type: image/jpeg\r\n\r\n");
-            writer.flush();
-
+            byte[] headerBytes = ("--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"image\"; filename=\"" + filename + "\"\r\n"
+                    + "Content-Type: image/jpeg\r\n\r\n").getBytes(StandardCharsets.UTF_8);
+            os.write(headerBytes);
             os.write(frame);
+            byte[] footerBytes = ("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8);
+            os.write(footerBytes);
             os.flush();
-
-            writer.append("\r\n");
-            writer.append("--").append(boundary).append("--\r\n");
-            writer.flush();
-            writer.close();
+            os.close();
 
             int code = conn.getResponseCode();
+            InputStream is = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
+            if (is != null) {
+                byte[] b = new byte[256];
+                while (is.read(b) != -1) {}
+                is.close();
+            }
             Log.i(TAG, "Uploaded screenshot (" + frame.length + " bytes), status: " + code);
         } catch (Throwable t) {
             Log.e(TAG, "Screenshot upload failed: " + t.getMessage());
@@ -421,6 +432,7 @@ public class ScreenCaptureService extends Service {
     }
 
     private void stopCapture() {
+        isRunning = false;
         if (pollingExecutor != null) {
             try {
                 pollingExecutor.shutdownNow();

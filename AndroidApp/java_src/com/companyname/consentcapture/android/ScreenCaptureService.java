@@ -380,7 +380,7 @@ public class ScreenCaptureService extends Service {
         try {
             String baseUrl = portalUrl.replaceAll("/+$", "");
             URL url = new URL(baseUrl + "/api/images");
-            String boundary = "===Boundary" + System.currentTimeMillis() + "===";
+            String boundary = "---------------------------" + System.currentTimeMillis();
 
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
